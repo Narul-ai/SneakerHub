@@ -1,0 +1,230 @@
+const Product = require('../models/Product');
+const sendTelegramNotification = require('../utils/telegram');
+
+// @desc    Получение всех товаров
+exports.getAllProducts = async (req, res) => {
+    try {
+        const products = await Product.find().sort({ createdAt: -1 });
+        res.json(products);
+    } catch (error) {
+        res.status(500).json({ message: "Ошибка при получении товаров" });
+    }
+};
+
+// @desc    Получение одного товара по ID
+exports.getProductById = async (req, res) => {
+    try {
+        const product = await Product.findById(req.params.id);
+        if (product) {
+            res.json(product);
+        } else {
+            res.status(404).json({ message: "Товар не найден" });
+        }
+    } catch (error) {
+        res.status(500).json({ message: "Ошибка сервера" });
+    }
+};
+
+// @desc    Создание товара (Admin)
+exports.createProduct = async (req, res) => {
+    try {
+        console.log("🔥 [CONTROLLER] createProduct запущен"); 
+        
+        if (!req.user) {
+            console.log("⚠️ Ошибка: Нет req.user");
+            return res.status(401).json({ message: "Пользователь не определен. Ошибка авторизации." });
+        }
+
+        const { title, brand, price, oldPrice, images, sizes, description, category, countInStock } = req.body;
+        console.log("📦 Данные из body:", { title, brand, category, price });
+
+        const newProduct = new Product({
+            title,
+            brand,
+            price,
+            oldPrice: oldPrice || 0, 
+            category: category || 'sneakers', // Убрали строгую привязку для тестов
+            countInStock,
+            description,
+            sizes,
+            images,
+            owner: req.user._id 
+        });
+
+        const savedProduct = await newProduct.save();
+        console.log(`✅ Товар успешно сохранен в БД. ID: ${savedProduct._id}`);
+
+        sendTelegramNotification('NEW_PRODUCT', {
+            productName: `${brand} ${title}`,
+            price: price,
+            countInStock: countInStock,
+            size: (sizes && sizes.length > 0) ? sizes.join(', ') : 'N/A'
+        });
+
+        res.status(201).json(savedProduct);
+    } catch (error) {
+        console.error("❌ Error in createProduct:", error.message);
+        res.status(400).json({ message: "Ошибка при создании: " + error.message });
+    }
+};
+
+// @desc    Редактирование товара
+exports.updateProduct = async (req, res) => {
+    try {
+        const updatedProduct = await Product.findByIdAndUpdate(
+            req.params.id,
+            req.body,
+            { returnDocument: 'after' } // Пофиксил предупреждение Mongoose
+        );
+
+        if (!updatedProduct) return res.status(404).json({ message: "Товар не найден" });
+
+        // Уведомления
+        if (req.body.status === 'Completed') {
+            sendTelegramNotification('ORDER_COMPLETED', {
+                orderId: updatedProduct._id,
+                customerName: "Admin/System",
+                totalPrice: updatedProduct.price
+            });
+        } else {
+            sendTelegramNotification('PRODUCT_UPDATED', {
+                productName: updatedProduct.title,
+                price: updatedProduct.price,
+                countInStock: updatedProduct.countInStock
+            });
+        }
+
+        // Проверка на склад
+        if (req.body.countInStock !== undefined) {
+            if (req.body.countInStock === 0) {
+                 sendTelegramNotification('PRODUCT_SOLD_OUT', {
+                    productName: updatedProduct.title
+                });
+            } else if (req.body.countInStock > 0 && req.body.countInStock < 3) {
+                sendTelegramNotification('LOW_STOCK', {
+                    productName: updatedProduct.title,
+                    countInStock: updatedProduct.countInStock
+                });
+            }
+        }
+
+        res.json(updatedProduct);
+    } catch (error) {
+        console.error("❌ Error in updateProduct:", error.message);
+        res.status(400).json({ message: "Ошибка при обновлении" });
+    }
+};
+
+// @desc    Удаление товара
+exports.deleteProduct = async (req, res) => {
+    try {
+        const product = await Product.findByIdAndDelete(req.params.id);
+        if (!product) return res.status(404).json({ message: "Товар не найден" });
+        
+        sendTelegramNotification('PRODUCT_DELETED', {
+            productName: product.title,
+            productId: product._id
+        });
+
+        res.json({ message: "Товар успешно удален" });
+    } catch (error) {
+        res.status(500).json({ message: "Ошибка при удалении" });
+    }
+};
+
+// @desc    Создание отзыва
+exports.createProductReview = async (req, res) => {
+    const { rating, comment } = req.body;
+    try {
+        const product = await Product.findById(req.params.id);
+
+        if (product) {
+            if (!req.user) {
+                return res.status(401).json({ message: 'Необходима авторизация' });
+            }
+
+            const alreadyReviewed = product.reviews.find(
+                (r) => r.user && r.user.toString() === req.user._id.toString()
+            );
+
+            if (alreadyReviewed) {
+                return res.status(400).json({ message: 'Вы уже оставили отзыв' });
+            }
+
+            const review = {
+                name: req.user.name || 'Аноним',
+                rating: Number(rating),
+                comment,
+                user: req.user._id,
+            };
+
+            product.reviews.push(review);
+            product.numReviews = product.reviews.length;
+            product.rating = product.reviews.reduce((acc, item) => item.rating + acc, 0) / product.reviews.length;
+
+            await product.save({ validateBeforeSave: false });
+
+            sendTelegramNotification('NEW_REVIEW', {
+                userName: req.user.name || 'Аноним',
+                productName: product.title,
+                rating: rating,
+                comment: comment
+            });
+
+            res.status(201).json({ message: 'Отзыв добавлен успешно' });
+        } else {
+            res.status(404).json({ message: 'Товар не найден' });
+        }
+    } catch (error) {
+        res.status(400).json({ message: error.message });
+    }
+};
+
+// @desc    Удаление отзыва
+exports.deleteProductReview = async (req, res) => {
+    try {
+        const product = await Product.findById(req.params.id);
+
+        if (!product) {
+            return res.status(404).json({ message: 'Товар не найден' });
+        }
+
+        const reviewIndex = product.reviews.findIndex(
+            (r) => r._id.toString() === req.params.reviewId
+        );
+
+        if (reviewIndex === -1) {
+            return res.status(404).json({ message: 'Отзыв не найден' });
+        }
+
+        const review = product.reviews[reviewIndex];
+        const userId = req.user ? req.user._id.toString() : null;
+        const reviewOwnerId = review.user ? review.user.toString() : null;
+        
+        const isAuthor = reviewOwnerId && userId === reviewOwnerId;
+        const isAdmin = req.user && req.user.role === 'admin';
+
+        if (isAuthor || isAdmin) {
+            product.reviews.splice(reviewIndex, 1);
+            product.numReviews = product.reviews.length;
+
+            product.rating = product.numReviews > 0 
+                ? product.reviews.reduce((acc, item) => item.rating + acc, 0) / product.numReviews 
+                : 0;
+
+            await product.save({ validateBeforeSave: false });
+
+            sendTelegramNotification('REVIEW_DELETED', {
+                productName: product.title,
+                deletedBy: isAdmin ? "Admin" : "Author"
+            });
+
+            res.json({ message: 'Отзыв удален' });
+        } else {
+            res.status(401).json({ message: 'У вас нет прав на удаление этого отзыва' });
+        }
+    } catch (error) {
+        console.error("ОШИБКА:", error);
+        res.status(500).json({ message: "Ошибка на сервере", error: error.message });
+    }
+};

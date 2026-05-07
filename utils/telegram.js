@@ -4,16 +4,25 @@ require('dotenv').config();
 const token = process.env.TELEGRAM_TOKEN;
 const adminChatId = process.env.ADMIN_CHAT_ID;
 
-// Включаем polling: true, чтобы бот мог "слышать" нажатия на кнопки
+// Включаем polling: true, чтобы бот мог "слышать" сообщения и нажатия на кнопки
 const bot = token ? new TelegramBot(token, { polling: true }) : null;
 
-// Обработка нажатий на кнопки (Callback Queries)
+// --- НОВОЕ: Обработка команды /start для всех пользователей ---
 if (bot) {
+    bot.onText(/\/start/, (msg) => {
+        const chatId = msg.chat.id;
+        const firstName = msg.from.first_name || 'друг';
+
+        // Это сообщение придет ТОМУ, кто нажал /start (твоему другу)
+        bot.sendMessage(chatId, `Привет, ${firstName}! 👋\n\nДобро пожаловать в <b>SneakerHub</b>!\n\nЯ — бот-помощник. Пока что я помогаю админу управлять заказами, но ты можешь зайти на наш сайт и выбрать себе пару кроссовок:\nhttps://sneaker-hub-frontend.vercel.app`, { parse_mode: 'HTML' });
+    });
+
+    // Обработка нажатий на кнопки (Callback Queries)
     bot.on('callback_query', async (callbackQuery) => {
         const { data, message } = callbackQuery;
         const chatId = message.chat.id;
 
-        // Здесь будет логика обработки (например, вызов API для смены статуса в базе)
+        // Логика обработки заказов (оставляем как было)
         if (data.startsWith('confirm_order_')) {
             const orderId = data.replace('confirm_order_', '');
             await bot.sendMessage(chatId, `⏳ Запрос на подтверждение заказа <code>${orderId}</code> отправлен в систему...`, { parse_mode: 'HTML' });
@@ -23,7 +32,6 @@ if (bot) {
             await bot.sendMessage(chatId, `❌ Запрос на отмену заказа <code>${orderId}</code> отправлен...`, { parse_mode: 'HTML' });
         }
 
-        // Убираем "часики" на кнопке в Telegram
         bot.answerCallbackQuery(callbackQuery.id);
     });
 }
@@ -42,7 +50,7 @@ const sendTelegramNotification = async (type, data) => {
         }
 
         let message = '';
-        let options = { parse_mode: 'HTML' }; // Настройки сообщения (по умолчанию только HTML)
+        let options = { parse_mode: 'HTML' };
         
         let timestamp = new Date().toLocaleString('ru-RU');
         try {
@@ -79,7 +87,6 @@ const sendTelegramNotification = async (type, data) => {
                     `📅 <i>${timestamp}</i>`
                 ].join('\n');
                 
-                // Добавляем кнопки управления
                 options.reply_markup = {
                     inline_keyboard: [
                         [
@@ -226,14 +233,12 @@ const sendTelegramNotification = async (type, data) => {
                 message = `<b>🔔 Системное уведомление:</b>\n<code>${JSON.stringify(data)}</code>`;
         }
 
+        // ВАЖНО: Все эти уведомления из switch отправляются ТОЛЬКО на adminChatId
         await bot.sendMessage(adminChatId, message, options);
         console.log(`✅ TG Notification [${type}] sent successfully!`);
 
     } catch (error) {
         console.error('❌ TG Error (Global Catch):', error.message);
-        if (error.response && error.response.body) {
-            console.error('⚠️ Ответ от Telegram API:', error.response.body);
-        }
     }
 };
 

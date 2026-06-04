@@ -4,72 +4,91 @@ require('dotenv').config();
 const token = process.env.TELEGRAM_TOKEN;
 const adminChatId = process.env.ADMIN_CHAT_ID;
 
-// Включаем polling: true, чтобы бот мог "слышать" сообщения и нажатия на кнопки
+// Initialize bot instance with polling enabled
 const bot = token ? new TelegramBot(token, { polling: true }) : null;
 
-// --- НОВОЕ: Обработка команды /start для всех пользователей ---
+// --- User Interactions (/start command) ---
 if (bot) {
     bot.onText(/\/start/, (msg) => {
         const chatId = msg.chat.id;
-        const firstName = msg.from.first_name || 'друг';
+        const firstName = msg.from.first_name || 'friend';
 
-        // Это сообщение придет ТОМУ, кто нажал /start (твоему другу)
-        bot.sendMessage(chatId, `Привет, ${firstName}! 👋\n\nДобро пожаловать в <b>SneakerHub</b>!\n\nЯ — бот-помощник. Пока что я помогаю админу управлять заказами, но ты можешь зайти на наш сайт и выбрать себе пару кроссовок:\nhttps://sneaker-hub-frontend.vercel.app`, { parse_mode: 'HTML' });
+        const welcomeMessage = [
+            `━━━━━━━━━━━━━━━━━━`,
+            `👋 <b>Welcome to SneakerHub, ${firstName}!</b>`,
+            `━━━━━━━━━━━━━━━━━━`,
+            `I am your automated assistant. I'm here to provide live tracking updates for your orders and notify you about exclusive drops! 🔥`,
+            `\n👟 <b>Ready to upgrade your rotation?</b>`,
+            `Explore our premium collection on our official store:`,
+            `https://sneaker-hub-frontend.vercel.app`
+        ].join('\n');
+
+        bot.sendMessage(chatId, welcomeMessage, { parse_mode: 'HTML' });
     });
 
-    // Обработка нажатий на кнопки (Callback Queries)
+    // Handle Admin Action Callback Queries
     bot.on('callback_query', async (callbackQuery) => {
         const { data, message } = callbackQuery;
         const chatId = message.chat.id;
 
-        // Логика обработки заказов (оставляем как было)
         if (data.startsWith('confirm_order_')) {
             const orderId = data.replace('confirm_order_', '');
-            await bot.sendMessage(chatId, `⏳ Запрос на подтверждение заказа <code>${orderId}</code> отправлен в систему...`, { parse_mode: 'HTML' });
+            await bot.sendMessage(chatId, `⏳ Order confirmation request for <code>${orderId}</code> dispatched to system...`, { parse_mode: 'HTML' });
         } 
         else if (data.startsWith('cancel_order_')) {
             const orderId = data.replace('cancel_order_', '');
-            await bot.sendMessage(chatId, `❌ Запрос на отмену заказа <code>${orderId}</code> отправлен...`, { parse_mode: 'HTML' });
+            await bot.sendMessage(chatId, `❌ Order cancellation request for <code>${orderId}</code> initiated...`, { parse_mode: 'HTML' });
         }
 
         bot.answerCallbackQuery(callbackQuery.id);
     });
 }
 
-const sendTelegramNotification = async (type, data) => {
+/**
+ * Global Telegram Notification Dispatcher
+ * @param {string} type - Notification action type
+ * @param {object} data - Dynamic context data payload
+ * @param {string|number|null} targetChatId - Optional specific recipient ID (Defaults to Admin)
+ */
+const sendTelegramNotification = async (type, data, targetChatId = null) => {
     try {
-        console.log(`📡 TG Bot: Начинаю отправку [${type}]`);
+        console.log(`📡 TG Bot: Initiating dispatch sequence [${type}]`);
 
         if (!bot) {
-            console.log('⚠️ TG Bot: Отсутствует TELEGRAM_TOKEN в .env');
+            console.log('⚠️ TG Bot: Missing TELEGRAM_TOKEN configuration in environment.');
             return;
         }
-        if (!adminChatId) {
-            console.log('⚠️ TG Bot: Отсутствует ADMIN_CHAT_ID в .env');
+
+        // Determine target recipient (use specific user ID or fallback to global system administrator)
+        const recipientId = targetChatId || adminChatId;
+
+        if (!recipientId) {
+            console.log('⚠️ TG Bot: Missing valid recipient identification ID.');
             return;
         }
 
         let message = '';
         let options = { parse_mode: 'HTML' };
         
-        let timestamp = new Date().toLocaleString('ru-RU');
+        let timestamp = new Date().toLocaleString('en-US');
         try {
-            timestamp = new Date().toLocaleString('ru-RU', { 
+            timestamp = new Date().toLocaleString('en-US', { 
                 timeZone: 'Asia/Almaty',
                 day: '2-digit', month: '2-digit', year: 'numeric',
-                hour: '2-digit', minute: '2-digit', second: '2-digit'
+                hour: '2-digit', minute: '2-digit', second: '2-digit',
+                hour12: false
             });
         } catch (timeErr) {
-            console.log("⚠️ TG Bot: Ошибка таймзоны, используем стандартное время сервера.");
+            console.log("⚠️ TG Bot: Timezone parsing failed. Falling back to internal server clock.");
         }
 
         switch (type) {
             case 'SERVER_STARTED':
                 message = [
-                    `<b>🟢 СЕРВЕР ЗАПУЩЕН</b>`,
+                    `<b>🟢 SNEAKERHUB CORE ENGINE ONLINE</b>`,
                     `━━━━━━━━━━━━━━━━━━`,
-                    `<b>🚀 Порт:</b> <code>${data.port}</code>`,
-                    `<b>🌐 Статус БД:</b> Подключено`,
+                    `<b>🚀 Operational Port:</b> <code>${data.port}</code>`,
+                    `<b>🌐 Database Status:</b> CONNECTED / SECURE`,
                     `━━━━━━━━━━━━━━━━━━`,
                     `📅 <i>${timestamp}</i>`
                 ].join('\n');
@@ -77,12 +96,12 @@ const sendTelegramNotification = async (type, data) => {
 
             case 'NEW_ORDER':
                 message = [
-                    `<b>📦 ПОСТУПИЛ НОВЫЙ ЗАКАЗ!</b>`,
+                    `<b>📦 NEW INCOMING ORDER PLACED!</b>`,
                     `━━━━━━━━━━━━━━━━━━`,
-                    `<b>🆔 ID:</b> <code>${data.orderId}</code>`,
-                    `<b>👤 Клиент:</b> <code>${data.customerName}</code>`,
-                    `<b>💰 Сумма:</b> <code>$${data.totalPrice}</code>`,
-                    `<b>📍 Адрес:</b> <i>${data.address || 'Не указан'}</i>`,
+                    `<b>🆔 Order ID:</b> <code>${data.orderId}</code>`,
+                    `<b>👤 Customer:</b> <code>${data.customerName}</code>`,
+                    `<b>💰 Total Price:</b> <code>$${data.totalPrice}</code>`,
+                    `<b>📍 Destination:</b> <i>${data.address || 'Not Provided'}</i>`,
                     `━━━━━━━━━━━━━━━━━━`,
                     `📅 <i>${timestamp}</i>`
                 ].join('\n');
@@ -90,45 +109,59 @@ const sendTelegramNotification = async (type, data) => {
                 options.reply_markup = {
                     inline_keyboard: [
                         [
-                            { text: '✅ Подтвердить', callback_data: `confirm_order_${data.orderId}` },
-                            { text: '❌ Отменить', callback_data: `cancel_order_${data.orderId}` }
+                            { text: '✅ Approve Order', callback_data: `confirm_order_${data.orderId}` },
+                            { text: '❌ Reject Order', callback_data: `cancel_order_${data.orderId}` }
                         ]
                     ]
                 };
                 break;
 
             case 'ORDER_SHIPPED':
+                // Premium layout optimized specifically for customers tracking their parcel
                 message = [
-                    `<b>🚚 ЗАКАЗ В ПУТИ</b>`,
+                    `<b>🚚 YOUR SNEAKERHUB PARCEL IS EN ROUTE!</b>`,
                     `━━━━━━━━━━━━━━━━━━`,
-                    `<b>🆔 ID:</b> <code>${data.orderId}</code>`,
-                    `<b>👤 Клиент:</b> <code>${data.customerName}</code>`,
-                    `<b>🏁 Статус:</b> ⚡ ОТПРАВЛЕНО / В ПУТИ`,
+                    `Great news! Your order has been processed and handed over to our fulfillment courier.`,
+                    `\n<b>🆔 Tracking ID:</b> <code>${data.orderId}</code>`,
+                    `<b>👤 Recipient:</b> <code>${data.customerName}</code>`,
+                    `<b>🏁 Dispatch Status:</b> ⚡ IN TRANSIT`,
                     `━━━━━━━━━━━━━━━━━━`,
-                    `📅 <i>${timestamp}</i>`
+                    `👇 <i>Keep tabs on your package live on our website:</i>`
                 ].join('\n');
+
+                options.reply_markup = {
+                    inline_keyboard: [
+                        [
+                            { text: '🌐 Track on SneakerHub', url: 'https://sneaker-hub-frontend.vercel.app' }
+                        ]
+                    ]
+                };
                 break;
 
             case 'NEW_PRODUCT':
                 message = [
-                    `<b>🆕 НОВЫЙ ДРОП В SNEAKERHUB</b>`,
+                    `<b>🔥 EXCLUSIVE NEW DROP ARRIVED!</b>`,
                     `━━━━━━━━━━━━━━━━━━`,
-                    `<b>👟 Модель:</b> <code>${data.productName}</code>`,
-                    `<b>💰 Цена:</b> <code>$${data.price}</code>`,
-                    `<b>📦 В наличии:</b> <code>${data.countInStock} пар</code>`,
-                    `<b>📏 Размеры:</b> <code>${data.size}</code>`,
+                    `<b>👟 Model:</b> <code>${data.productName}</code>`,
+                    `<b>💰 Retail Price:</b> <code>$${data.price}</code>`,
+                    `<b>📦 Allocation:</b> <code>${data.countInStock} Units Available</code>`,
+                    `<b>📏 Size Index:</b> <code>${data.size || 'Standard Run'}</code>`,
                     `━━━━━━━━━━━━━━━━━━`,
-                    `📅 <i>${timestamp}</i>`
+                    `<i>Secure your pair before allocations exhaust!</i> \n📅 <i>${timestamp}</i>`
                 ].join('\n');
+                
+                options.reply_markup = {
+                    inline_keyboard: [[{ text: '🛒 Shop Drop Now', url: 'https://sneaker-hub-frontend.vercel.app' }]]
+                };
                 break;
 
             case 'PRODUCT_UPDATED':
                 message = [
-                    `<b>🔄 ТОВАР ОБНОВЛЕН</b>`,
+                    `<b>🔄 CATALOG LOGISTICS UPDATED</b>`,
                     `━━━━━━━━━━━━━━━━━━`,
-                    `<b>👟 Модель:</b> <code>${data.productName}</code>`,
-                    `<b>💰 Новая Цена:</b> <code>$${data.price}</code>`,
-                    `<b>📦 Остаток:</b> <code>${data.countInStock} шт.</code>`,
+                    `<b>👟 Model:</b> <code>${data.productName}</code>`,
+                    `<b>💰 Adjusted Price:</b> <code>$${data.price}</code>`,
+                    `<b>📦 Stock Balance:</b> <code>${data.countInStock} units</code>`,
                     `━━━━━━━━━━━━━━━━━━`,
                     `📅 <i>${timestamp}</i>`
                 ].join('\n');
@@ -136,12 +169,12 @@ const sendTelegramNotification = async (type, data) => {
 
             case 'ORDER_COMPLETED':
                 message = [
-                    `<b>✅ ЗАКАЗ ВЫПОЛНЕН!</b>`,
+                    `<b>🏆 ORDER DELIVERED SUCCESSFULLY</b>`,
                     `━━━━━━━━━━━━━━━━━━`,
-                    `<b>🆔 ID:</b> <code>${data.orderId}</code>`,
-                    `<b>👤 Клиент:</b> <code>${data.customerName}</code>`,
-                    `<b>💰 Сумма:</b> <code>$${data.totalPrice}</code>`,
-                    `<b>🏁 Статус:</b> 🏆 ЗАВЕРШЕН`,
+                    `<b>🆔 Order ID:</b> <code>${data.orderId}</code>`,
+                    `<b>👤 Customer:</b> <code>${data.customerName}</code>`,
+                    `<b>💰 Revenue Settled:</b> <code>$${data.totalPrice}</code>`,
+                    `<b>🏁 Final Status:</b> COMPLETED ✅`,
                     `━━━━━━━━━━━━━━━━━━`,
                     `📅 <i>${timestamp}</i>`
                 ].join('\n');
@@ -149,12 +182,12 @@ const sendTelegramNotification = async (type, data) => {
 
             case 'NEW_REVIEW':
                 message = [
-                    `<b>⭐ НОВЫЙ ОТЗЫВ!</b>`,
+                    `<b>⭐ NEW CUSTOMER REVIEW SUBMITTED</b>`,
                     `━━━━━━━━━━━━━━━━━━`,
-                    `<b>👤 От:</b> <code>${data.userName}</code>`,
-                    `<b>👟 Товар:</b> <code>${data.productName}</code>`,
-                    `<b>⭐️ Оценка:</b> <code>${data.rating}/5</code>`,
-                    `<b>💬 Комментарий:</b> <i>"${data.comment}"</i>`,
+                    `<b>👤 User:</b> <code>${data.userName}</code>`,
+                    `<b>👟 Silhouette:</b> <code>${data.productName}</code>`,
+                    `<b>⭐️ Rating:</b> <code>${data.rating}/5 Stars</code>`,
+                    `<b>💬 Verdict:</b> <i>"${data.comment}"</i>`,
                     `━━━━━━━━━━━━━━━━━━`,
                     `📅 <i>${timestamp}</i>`
                 ].join('\n');
@@ -162,10 +195,10 @@ const sendTelegramNotification = async (type, data) => {
 
             case 'REVIEW_DELETED':
                 message = [
-                    `<b>🗑️ ОТЗЫВ УДАЛЕН</b>`,
+                    `<b>🗑️ REVIEW MODERATED / REMOVED</b>`,
                     `━━━━━━━━━━━━━━━━━━`,
-                    `<b>👟 Товар:</b> <code>${data.productName}</code>`,
-                    `<b>👤 Кем удален:</b> <code>${data.deletedBy}</code>`,
+                    `<b>👟 Silhouette:</b> <code>${data.productName}</code>`,
+                    `<b>👤 Actor:</b> <code>${data.deletedBy}</code>`,
                     `━━━━━━━━━━━━━━━━━━`,
                     `📅 <i>${timestamp}</i>`
                 ].join('\n');
@@ -173,11 +206,11 @@ const sendTelegramNotification = async (type, data) => {
 
             case 'LOW_STOCK':
                 message = [
-                    `<b>⚠️ ЗАКАНЧИВАЕТСЯ ТОВАР</b>`,
+                    `<b>⚠️ CRITICAL INVENTORY WARNING</b>`,
                     `━━━━━━━━━━━━━━━━━━`,
-                    `<b>👟 Модель:</b> <code>${data.productName}</code>`,
-                    `<b>📉 Осталось:</b> <code>${data.countInStock} шт.</code>`,
-                    `<i>Пора делать ресток!</i>`,
+                    `<b>👟 Model:</b> <code>${data.productName}</code>`,
+                    `<b>📉 Units Left:</b> <code>${data.countInStock} units</code>`,
+                    `<i>Action required: Restock recommended immediately.</i>`,
                     `━━━━━━━━━━━━━━━━━━`,
                     `📅 <i>${timestamp}</i>`
                 ].join('\n');
@@ -185,10 +218,10 @@ const sendTelegramNotification = async (type, data) => {
 
             case 'PRODUCT_SOLD_OUT':
                 message = [
-                    `<b>🚨 ТОВАР РАСПРОДАН (SOLD OUT)</b>`,
+                    `<b>🚨 PRODUCT COMPLETELY SOLD OUT</b>`,
                     `━━━━━━━━━━━━━━━━━━`,
-                    `<b>👟 Модель:</b> <code>${data.productName}</code>`,
-                    `❌ <i>Остаток на складе: 0 шт.</i>`,
+                    `<b>👟 Model:</b> <code>${data.productName}</code>`,
+                    `❌ <i>Warehouse inventory balance: 0 pairs.</i>`,
                     `━━━━━━━━━━━━━━━━━━`,
                     `📅 <i>${timestamp}</i>`
                 ].join('\n');
@@ -196,11 +229,11 @@ const sendTelegramNotification = async (type, data) => {
 
             case 'USER_REGISTERED':
                 message = [
-                    `<b>🎉 НОВЫЙ ПОЛЬЗОВАТЕЛЬ</b>`,
+                    `<b>🎉 NEW MEMBERSHIP REGISTERED</b>`,
                     `━━━━━━━━━━━━━━━━━━`,
-                    `<b>👤 Имя:</b> <code>${data.name}</code>`,
-                    `<b>📧 Email:</b> <code>${data.email}</code>`,
-                    `<b>🪪 Логин:</b> <code>@${data.username}</code>`,
+                    `<b>👤 Name:</b> <code>${data.name}</code>`,
+                    `<b>📧 Email Link:</b> <code>${data.email}</code>`,
+                    `<b>🪪 Identity handle:</b> <code>@${data.username || 'unknown'}</code>`,
                     `━━━━━━━━━━━━━━━━━━`,
                     `📅 <i>${timestamp}</i>`
                 ].join('\n');
@@ -208,11 +241,11 @@ const sendTelegramNotification = async (type, data) => {
 
             case 'ADMIN_LOGIN':
                 message = [
-                    `<b>🔐 ВХОД В АДМИНКУ</b>`,
+                    `<b>🔐 SECURE ADMIN LOGIN DETECTED</b>`,
                     `━━━━━━━━━━━━━━━━━━`,
-                    `<b>👑 Админ:</b> <code>${data.name}</code>`,
-                    `<b>📧 Email:</b> <code>${data.email}</code>`,
-                    `<i>Если это был не ты, срочно проверь безопасность!</i>`,
+                    `<b>👑 Operator:</b> <code>${data.name}</code>`,
+                    `<b>📧 Email Auth:</b> <code>${data.email}</code>`,
+                    `<i>If this session access was unauthorized, evaluate credentials immediately.</i>`,
                     `━━━━━━━━━━━━━━━━━━`,
                     `📅 <i>${timestamp}</i>`
                 ].join('\n');
@@ -220,26 +253,28 @@ const sendTelegramNotification = async (type, data) => {
 
             case 'PRODUCT_DELETED':
                 message = [
-                    `<b>🗑️ ТОВАР УДАЛЕН ИЗ БАЗЫ</b>`,
+                    `<b>🗑️ PRODUCT RECORD PURGED FROM DATABASE</b>`,
                     `━━━━━━━━━━━━━━━━━━`,
-                    `<b>👟 Модель:</b> <code>${data.productName}</code>`,
-                    `<b>🆔 ID:</b> <code>${data.productId}</code>`,
+                    `<b>👟 Model:</b> <code>${data.productName}</code>`,
+                    `<b>🆔 Storage ID:</b> <code>${data.productId}</code>`,
                     `━━━━━━━━━━━━━━━━━━`,
                     `📅 <i>${timestamp}</i>`
                 ].join('\n');
                 break;
 
             default:
-                message = `<b>🔔 Системное уведомление:</b>\n<code>${JSON.stringify(data)}</code>`;
+                message = `<b>🔔 Core System Broadcast:</b>\n<code>${JSON.stringify(data)}</code>`;
         }
 
-        // ВАЖНО: Все эти уведомления из switch отправляются ТОЛЬКО на adminChatId
-        await bot.sendMessage(adminChatId, message, options);
-        console.log(`✅ TG Notification [${type}] sent successfully!`);
+        // Send message safely to prevent crash if a user blocked the bot
+        await bot.sendMessage(recipientId, message, options);
+        console.log(`✅ TG Notification [${type}] dispatched successfully to destination ID: ${recipientId}`);
 
     } catch (error) {
-        console.error('❌ TG Error (Global Catch):', error.message);
+        console.error('❌ TG Notification System Error:', error.message);
     }
 };
 
+// Backwards-compatible complex export strategy
+sendTelegramNotification.bot = bot;
 module.exports = sendTelegramNotification;

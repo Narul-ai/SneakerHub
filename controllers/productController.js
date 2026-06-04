@@ -1,4 +1,5 @@
 const Product = require('../models/Product');
+const User = require('../models/User'); // Подключили пользователей для рассылки нотификаций
 const sendTelegramNotification = require('../utils/telegram');
 
 // @desc    Получение всех товаров
@@ -25,7 +26,7 @@ exports.getProductById = async (req, res) => {
     }
 };
 
-// @desc    Создание товара (Admin)
+// @desc    Создание товара (Admin) + Автоматическая рассылка пользователям
 exports.createProduct = async (req, res) => {
     try {
         console.log("🔥 [CONTROLLER] createProduct запущен"); 
@@ -43,7 +44,7 @@ exports.createProduct = async (req, res) => {
             brand,
             price,
             oldPrice: oldPrice || 0, 
-            category: category || 'sneakers', // Убрали строгую привязку для тестов
+            category: category || 'sneakers', 
             countInStock,
             description,
             sizes,
@@ -54,12 +55,31 @@ exports.createProduct = async (req, res) => {
         const savedProduct = await newProduct.save();
         console.log(`✅ Товар успешно сохранен в БД. ID: ${savedProduct._id}`);
 
+        // 1. Отправляем техническое уведомление админу в чат (по умолчанию)
         sendTelegramNotification('NEW_PRODUCT', {
             productName: `${brand} ${title}`,
             price: price,
             countInStock: countInStock,
             size: (sizes && sizes.length > 0) ? sizes.join(', ') : 'N/A'
         });
+
+        // 2. МАССОВАЯ РАССЫЛКА: Находим всех клиентов, у которых привязан Telegram, и пушим им новинку
+        try {
+            const subscribers = await User.find({ telegramChatId: { $exists: true, $ne: null } });
+            
+            subscribers.forEach(user => {
+                sendTelegramNotification('NEW_PRODUCT', {
+                    productName: `${brand} ${title}`,
+                    price: price,
+                    countInStock: countInStock,
+                    size: (sizes && sizes.length > 0) ? sizes.join(', ') : 'N/A'
+                }, user.telegramChatId); // Передаем ID подписчика третьим параметром
+            });
+            
+            console.log(`📢 Рассылка о новом дропе успешно отправлена ${subscribers.length} пользователям.`);
+        } catch (broadcastErr) {
+            console.error("⚠️ Ошибка при выполнении массовой рассылки бота:", broadcastErr.message);
+        }
 
         res.status(201).json(savedProduct);
     } catch (error) {
@@ -74,12 +94,12 @@ exports.updateProduct = async (req, res) => {
         const updatedProduct = await Product.findByIdAndUpdate(
             req.params.id,
             req.body,
-            { returnDocument: 'after' } // Пофиксил предупреждение Mongoose
+            { returnDocument: 'after' } 
         );
 
         if (!updatedProduct) return res.status(404).json({ message: "Товар не найден" });
 
-        // Уведомления
+        // Уведомления (уходят админу)
         if (req.body.status === 'Completed') {
             sendTelegramNotification('ORDER_COMPLETED', {
                 orderId: updatedProduct._id,
@@ -94,7 +114,7 @@ exports.updateProduct = async (req, res) => {
             });
         }
 
-        // Проверка на склад
+        // Проверка на склад (уходят админу)
         if (req.body.countInStock !== undefined) {
             if (req.body.countInStock === 0) {
                  sendTelegramNotification('PRODUCT_SOLD_OUT', {
@@ -164,6 +184,7 @@ exports.createProductReview = async (req, res) => {
 
             await product.save({ validateBeforeSave: false });
 
+            // Оповещаем админа о новом отзыве на модерацию
             sendTelegramNotification('NEW_REVIEW', {
                 userName: req.user.name || 'Аноним',
                 productName: product.title,

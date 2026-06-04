@@ -1,12 +1,14 @@
 const Data = require('../models/Data');
+const User = require('../models/User'); // Подключаем модель юзера, чтобы брать их telegramChatId
+const sendTelegramNotification = require('../utils/telegram');
 
 // 1. Получить данные (с сортировкой по дате — новые сверху)
 exports.getData = async (req, res) => {
   try {
-    // В профи-сайтах данные всегда сортируются: .sort({ createdAt: -1 })
-    const data = await Data.find({ user: req.user.id }).sort({ createdAt: -1 });
+    // Если это админ — отдаем все заказы системы, если обычный юзер — только его личные
+    const query = req.user.role === 'admin' ? {} : { user: req.user.id };
     
-    // Если данных нет, возвращаем пустой массив (это норма, не ошибка)
+    const data = await Data.find(query).sort({ createdAt: -1 });
     res.json(data);
   } catch (error) {
     console.error('Ошибка получения данных:', error);
@@ -14,22 +16,30 @@ exports.getData = async (req, res) => {
   }
 };
 
-// 2. Создать запись (с валидацией входящих данных)
+// 2. Создать запись / Оформить заказ (с валидацией и уведомлением админа)
 exports.createData = async (req, res) => {
   try {
     const { text, number, items, totalPrice } = req.body;
 
-    // Профессиональная проверка: не пустые ли данные?
     if (!text && !items) {
       return res.status(400).json({ message: 'Данные для записи отсутствуют' });
     }
 
     const newData = await Data.create({
-      text,
+      text, // Здесь может храниться адрес или комментарий
       number,
-      items: items || [], // Поле для массива товаров (если это заказ)
+      items: items || [], 
       totalPrice: totalPrice || 0,
-      user: req.user.id // Привязка к текущему авторизованному юзеру
+      status: 'Pending', // Начальный статус заказа
+      user: req.user.id 
+    });
+
+    // Оповещаем ТЕБЯ в телеграм, что на сайте SneakerHub новый заказ!
+    sendTelegramNotification('NEW_ORDER', {
+      orderId: newData._id,
+      customerName: req.user.name || 'Authorized Client',
+      totalPrice: newData.totalPrice,
+      address: text || 'Not provided'
     });
 
     res.status(201).json(newData);
@@ -39,13 +49,16 @@ exports.createData = async (req, res) => {
   }
 };
 
-// 3. Удалить запись (с проверкой на существование)
+// 3. Удалить запись (с проверкой прав)
 exports.deleteData = async (req, res) => {
   try {
-    const deletedItem = await Data.findOneAndDelete({
-      _id: req.params.id,
-      user: req.user.id // Безопасность: удаляем только СВОЁ
-    });
+    // Админ может удалить любую запись, пользователь — только свою
+    const query = { _id: req.params.id };
+    if (req.user.role !== 'admin') {
+      query.user = req.user.id;
+    }
+
+    const deletedItem = await Data.findOneAndDelete(query);
 
     if (!deletedItem) {
       return res.status(404).json({ message: 'Запись не найдена или у вас нет прав на удаление' });
@@ -58,19 +71,60 @@ exports.deleteData = async (req, res) => {
   }
 };
 
-// 4. Обновить запись (частичное обновление через $set)
+// 4. Обновить запись / Изменить статус заказа (Админ -> Пользователю)
 exports.updateData = async (req, res) => {
   try {
-    const { text, number } = req.body;
+    const { text, number, status } = req.body;
+
+    // СВЕРХВАЖНО ДЛЯ АДМИНКИ: Если обновляет админ, убираем привязку к req.user.id,
+    // чтобы ты мог менять статусы заказов других пользователей!
+    const query = { _id: req.params.id };
+    if (req.user.role !== 'admin') {
+      query.user = req.user.id;
+    }
+
+    // Собираем поля для динамического обновления через $set
+    const updateFields = {};
+    if (text !== undefined) updateFields.text = text;
+    if (number !== undefined) updateFields.number = number;
+    if (status !== undefined) updateFields.status = status;
 
     const updated = await Data.findOneAndUpdate(
-      { _id: req.params.id, user: req.user.id },
-      { $set: { text, number } }, // Используем $set для безопасности
-      { new: true, runValidators: true } // runValidators проверит данные по схеме
+      query,
+      { $set: updateFields }, 
+      { new: true, runValidators: true } 
     );
 
     if (!updated) {
       return res.status(404).json({ message: 'Запись для обновления не найдена' });
+    }
+
+    // --- УВЕДОМЛЕНИЯ КЛИЕНТАМ О СМЕНЕ СТАТУСА ---
+    if (status) {
+      try {
+        // Находим покупателя, которому принадлежит этот заказ
+        const customer = await User.findById(updated.user);
+
+        if (customer && customer.telegramChatId) {
+          // Если ты выставил статус "В пути" или "Shipped"
+          if (status === 'В пути' || status === 'Shipped') {
+            sendTelegramNotification('ORDER_SHIPPED', {
+              orderId: updated._id,
+              customerName: customer.name || 'Customer'
+            }, customer.telegramChatId); // Отправляем лично клиенту!
+          } 
+          // Если заказ успешно завершен
+          else if (status === 'Completed' || status === 'Завершен') {
+            sendTelegramNotification('ORDER_COMPLETED', {
+              orderId: updated._id,
+              customerName: customer.name || 'Customer',
+              totalPrice: updated.totalPrice
+            }, customer.telegramChatId); // Отправляем лично клиенту!
+          }
+        }
+      } catch (userErr) {
+        console.error('⚠️ Ошибка отправки статуса пользователю в ТГ:', userErr.message);
+      }
     }
 
     res.json(updated);

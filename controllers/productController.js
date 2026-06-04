@@ -88,7 +88,7 @@ exports.createProduct = async (req, res) => {
     }
 };
 
-// @desc    Редактирование товара
+// @desc    Редактирование товара / Изменение статуса заказа
 exports.updateProduct = async (req, res) => {
     try {
         const updatedProduct = await Product.findByIdAndUpdate(
@@ -99,14 +99,40 @@ exports.updateProduct = async (req, res) => {
 
         if (!updatedProduct) return res.status(404).json({ message: "Товар не найден" });
 
-        // Уведомления (уходят админу)
+        // Находим покупателя/владельца этого товара в базе данных, чтобы узнать его Telegram ID
+        let customerName = "Customer";
+        let customerTelegramChatId = null;
+        
+        try {
+            if (updatedProduct.owner) {
+                const customer = await User.findById(updatedProduct.owner);
+                if (customer) {
+                    customerName = customer.name || "Customer";
+                    customerTelegramChatId = customer.telegramChatId || null;
+                }
+            }
+        } catch (userFindErr) {
+            console.error("⚠️ Не удалось найти данные владельца для отправки ТГ:", userFindErr.message);
+        }
+
+        // Уведомления о смене статусов (Отправка клиенту + дублирование админу)
         if (req.body.status === 'Completed') {
             sendTelegramNotification('ORDER_COMPLETED', {
                 orderId: updatedProduct._id,
-                customerName: "Admin/System",
-                totalPrice: updatedProduct.price
+                customerName: customerName,
+                totalPrice: updatedProduct.price,
+                telegramChatId: customerTelegramChatId // Передаем ID Назерке внутрь объекта
+            });
+        } else if (req.body.status === 'Shipped' || req.body.status === 'In Transit') {
+            // ЛОГИКА ДЛЯ ДУБЛИРОВАНИЯ СТАТУСА "В ПУТИ" КЛИЕНТУ В ЛИЧКУ
+            sendTelegramNotification('ORDER_SHIPPED', {
+                orderId: updatedProduct._id,
+                customerName: customerName,
+                totalPrice: updatedProduct.price,
+                telegramChatId: customerTelegramChatId // Передаем ID Назерке внутрь объекта
             });
         } else {
+            // Обычное обновление параметров товара админом
             sendTelegramNotification('PRODUCT_UPDATED', {
                 productName: updatedProduct.title,
                 price: updatedProduct.price,

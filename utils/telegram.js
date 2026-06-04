@@ -76,7 +76,7 @@ if (bot) {
  * Global Telegram Notification Dispatcher
  * @param {string} type - Notification action type
  * @param {object} data - Dynamic context data payload
- * @param {string|number|null} targetChatId - Optional specific recipient ID (Defaults to Admin)
+ * @param {string|number|null} targetChatId - Optional specific recipient ID (Customer ID)
  */
 const sendTelegramNotification = async (type, data, targetChatId = null) => {
     try {
@@ -84,14 +84,6 @@ const sendTelegramNotification = async (type, data, targetChatId = null) => {
 
         if (!bot) {
             console.log('⚠️ TG Bot: Missing TELEGRAM_TOKEN configuration in environment.');
-            return;
-        }
-
-        // Determine target recipient (use specific user ID or fallback to global system administrator)
-        const recipientId = targetChatId || adminChatId;
-
-        if (!recipientId) {
-            console.log('⚠️ TG Bot: Missing valid recipient identification ID.');
             return;
         }
 
@@ -110,6 +102,7 @@ const sendTelegramNotification = async (type, data, targetChatId = null) => {
             console.log("⚠️ TG Bot: Timezone parsing failed. Falling back to internal server clock.");
         }
 
+        // Формирование текста сообщений в зависимости от типа события
         switch (type) {
             case 'SERVER_STARTED':
                 message = [
@@ -293,9 +286,34 @@ const sendTelegramNotification = async (type, data, targetChatId = null) => {
                 message = `<b>🔔 Core System Broadcast:</b>\n<code>${JSON.stringify(data)}</code>`;
         }
 
-        // Send message safely to prevent crash if a user blocked the bot
-        await bot.sendMessage(recipientId, message, options);
-        console.log(`✅ TG Notification [${type}] dispatched successfully to destination ID: ${recipientId}`);
+        // --- УМНАЯ СИСТЕМА ДВОЙНОЙ ОТПРАВКИ ---
+        
+        // Автоматически вычисляем ID клиента из переданных аргументов или внутренностей payload data
+        const customerId = targetChatId || data.telegramChatId || data.telegramId || (data.user && (data.user.telegramChatId || data.user.telegramId));
+        
+        // Типы уведомлений, которые ЖИЗНЕННО НЕОБХОДИМО доставить клиенту лично в чат
+        const clientFacingTypes = ['ORDER_SHIPPED', 'ORDER_COMPLETED', 'NEW_PRODUCT'];
+
+        if (clientFacingTypes.includes(type) && customerId && String(customerId) !== String(adminChatId)) {
+            try {
+                await bot.sendMessage(customerId, message, options);
+                console.log(`✅ TG Bot: Client notification [${type}] sent to user chat: ${customerId}`);
+            } catch (custErr) {
+                console.error(`⚠️ TG Bot: Client blocked the bot or wrong ID (${customerId}):`, custErr.message);
+            }
+        }
+
+        // Сообщение админу отправляется ВСЕГДА (и для админских событий, и как копия клиентских обновлений для твоих логов)
+        // Сообщение админу отправляется ВСЕГДА, кроме случаев массовой рассылки NEW_PRODUCT подписчикам
+        if (adminChatId && !(type === 'NEW_PRODUCT' && targetChatId)) {
+            try {
+                await bot.sendMessage(adminChatId, message, options);
+                console.log(`✅ TG Bot: Admin broadcast [${type}] logged successfully.`);
+            } catch (adminErr) {
+                console.error('❌ TG Bot: Critical failure sending message to Admin:', adminErr.message);
+            }
+        }
+        
 
     } catch (error) {
         console.error('❌ TG Notification System Error:', error.message);

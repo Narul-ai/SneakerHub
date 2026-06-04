@@ -1,4 +1,5 @@
 const TelegramBot = require('node-telegram-bot-api');
+const User = require('../models/User'); // Импортируем модель для автоматической привязки чатов
 require('dotenv').config(); 
 
 const token = process.env.TELEGRAM_TOKEN;
@@ -7,21 +8,48 @@ const adminChatId = process.env.ADMIN_CHAT_ID;
 // Initialize bot instance with polling enabled
 const bot = token ? new TelegramBot(token, { polling: true }) : null;
 
-// --- User Interactions (/start command) ---
+// --- User Interactions (/start command with Deep Linking support) ---
 if (bot) {
-    bot.onText(/\/start/, (msg) => {
+    bot.onText(/\/start(.*)/, async (msg, match) => {
         const chatId = msg.chat.id;
         const firstName = msg.from.first_name || 'friend';
+        
+        // Извлекаем параметр из ссылки (например, /start 6a21532781c7333c2bb914d2)
+        const startParam = match[1] ? match[1].trim() : null;
+        let bindingStatusMessage = '';
+
+        if (startParam) {
+            try {
+                // Пытаемся найти пользователя по его MongoDB ID
+                const user = await User.findById(startParam);
+                
+                if (user) {
+                    // Записываем ID в оба поля для стопроцентной совместимости
+                    user.telegramChatId = chatId;
+                    user.telegramId = String(chatId);
+                    await user.save();
+                    
+                    bindingStatusMessage = `\n\n<b>✅ Success:</b> Your Telegram account is now securely linked to your profile (<code>${user.name}</code>)! You will receive live delivery updates here.`;
+                    console.log(`🎯 Бот успешно связал аккаунт пользователя ${user.name} с chatId: ${chatId}`);
+                } else {
+                    bindingStatusMessage = `\n\n<b>⚠️ Note:</b> Welcome link parameter detected, but no matching account was found in SneakerHub database.`;
+                }
+            } catch (dbErr) {
+                console.error('❌ Ошибка при автоматической привязке Telegram ID:', dbErr.message);
+                bindingStatusMessage = `\n\n<b>⚠️ System:</b> Account linkage failed due to an internal database mismatch.`;
+            }
+        }
 
         const welcomeMessage = [
             `━━━━━━━━━━━━━━━━━━`,
             `👋 <b>Welcome to SneakerHub, ${firstName}!</b>`,
             `━━━━━━━━━━━━━━━━━━`,
             `I am your automated assistant. I'm here to provide live tracking updates for your orders and notify you about exclusive drops! 🔥`,
+            bindingStatusMessage, // Добавит лог успешной привязки, если юзер перешел по ссылке
             `\n👟 <b>Ready to upgrade your rotation?</b>`,
             `Explore our premium collection on our official store:`,
             `https://sneaker-hub-frontend.vercel.app`
-        ].join('\n');
+        ].filter(Boolean).join('\n');
 
         bot.sendMessage(chatId, welcomeMessage, { parse_mode: 'HTML' });
     });
@@ -117,7 +145,6 @@ const sendTelegramNotification = async (type, data, targetChatId = null) => {
                 break;
 
             case 'ORDER_SHIPPED':
-                // Premium layout optimized specifically for customers tracking their parcel
                 message = [
                     `<b>🚚 YOUR SNEAKERHUB PARCEL IS EN ROUTE!</b>`,
                     `━━━━━━━━━━━━━━━━━━`,
@@ -221,7 +248,7 @@ const sendTelegramNotification = async (type, data, targetChatId = null) => {
                     `<b>🚨 PRODUCT COMPLETELY SOLD OUT</b>`,
                     `━━━━━━━━━━━━━━━━━━`,
                     `<b>👟 Model:</b> <code>${data.productName}</code>`,
-                    `❌ <i>Warehouse inventory balance: 0 pairs.</i>`,
+                    `<b>📉 Warehouse inventory balance:</b> 0 pairs.`,
                     `━━━━━━━━━━━━━━━━━━`,
                     `📅 <i>${timestamp}</i>`
                 ].join('\n');

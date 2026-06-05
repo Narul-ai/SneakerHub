@@ -1,13 +1,11 @@
 const Data = require('../models/Data');
-const User = require('../models/User'); // Подключаем модель юзера, чтобы брать их telegramId
+const User = require('../models/User'); 
 const sendTelegramNotification = require('../utils/telegram');
 
-// 1. Получить данные (с сортировкой по дате — новые сверху)
+// 1. Получить данные
 exports.getData = async (req, res) => {
   try {
-    // Если это админ — отдаем все заказы системы, если обычный юзер — только его личные
     const query = req.user.role === 'admin' ? {} : { user: req.user.id };
-    
     const data = await Data.find(query).sort({ createdAt: -1 });
     res.json(data);
   } catch (error) {
@@ -16,7 +14,7 @@ exports.getData = async (req, res) => {
   }
 };
 
-// 2. Создать запись / Оформить заказ (с валидацией и уведомлением админа)
+// 2. Создать запись
 exports.createData = async (req, res) => {
   try {
     const { text, number, items, totalPrice } = req.body;
@@ -26,15 +24,14 @@ exports.createData = async (req, res) => {
     }
 
     const newData = await Data.create({
-      text, // Здесь может храниться адрес или комментарий
+      text, 
       number,
       items: items || [], 
       totalPrice: totalPrice || 0,
-      status: 'Pending', // Начальный статус заказа
+      status: 'Pending', 
       user: req.user.id 
     });
 
-    // Оповещаем ТЕБЯ в телеграм, что на сайте SneakerHub новый заказ!
     sendTelegramNotification('NEW_ORDER', {
       orderId: newData._id,
       customerName: req.user.name || 'Authorized Client',
@@ -49,10 +46,9 @@ exports.createData = async (req, res) => {
   }
 };
 
-// 3. Удалить запись (с проверкой прав)
+// 3. Удалить запись
 exports.deleteData = async (req, res) => {
   try {
-    // Админ может удалить любую запись, пользователь — только свою
     const query = { _id: req.params.id };
     if (req.user.role !== 'admin') {
       query.user = req.user.id;
@@ -71,19 +67,19 @@ exports.deleteData = async (req, res) => {
   }
 };
 
-// 4. Обновить запись / Изменить статус заказа (Админ -> Пользователю)
+// 4. Обновить запись (С ПОЛНЫМ ЛОГИРОВАНИЕМ ДЛЯ ТЕСТА)
 exports.updateData = async (req, res) => {
   try {
     const { text, number, status } = req.body;
+    
+    // 🔍 ЛОГ 1: Проверяем, пришёл ли вообще запрос в этот контроллер
+    console.log("🛠️ [updateData] Контроллер вызван! ID заказа:", req.params.id, "Полученный статус:", status);
 
-    // СВЕРХВАЖНО ДЛЯ АДМИНКИ: Если обновляет админ, убираем привязку к req.user.id,
-    // чтобы ты мог менять статусы заказов других пользователей!
     const query = { _id: req.params.id };
     if (req.user.role !== 'admin') {
       query.user = req.user.id;
     }
 
-    // Собираем поля для динамического обновления через $set
     const updateFields = {};
     if (text !== undefined) updateFields.text = text;
     if (number !== undefined) updateFields.number = number;
@@ -96,31 +92,46 @@ exports.updateData = async (req, res) => {
     );
 
     if (!updated) {
+      console.log("⚠️ [updateData] Заказ в базе данных не найден по запросу:", query);
       return res.status(404).json({ message: 'Запись для обновления не найдена' });
     }
 
-    // --- УВЕДОМЛЕНИЯ КЛИЕНТАМ О СМЕНЕ СТАТУСА ---
+    console.log("✅ [updateData] Заказ успешно обновлен в БД. Текущий статус заказа:", updated.status);
+
     if (status) {
       try {
-        // Находим покупателя, которому принадлежит этот заказ
+        // Ищем покупателя
+        console.log("🔍 [updateData] Ищем пользователя с ID:", updated.user);
         const customer = await User.findById(updated.user);
 
-        if (customer && customer.telegramId) { // 👈 Проверяем telegramId вместо telegramChatId
-          // Если ты выставил статус "В пути" или "Shipped"
+        if (!customer) {
+          console.log("❌ [updateData] Пользователь, владеющий заказом, НЕ НАЙДЕН в коллекции users!");
+        } else {
+          console.log(`👤 [updateData] Пользователь найден: ${customer.name}. Его telegramId в базе:`, customer.telegramId);
+        }
+
+        if (customer && customer.telegramId) {
+          console.log(`🚀 [updateData] Проверка условий для отправки. Текст статуса: "${status}"`);
+          
           if (status === 'В пути' || status === 'Shipped') {
+            console.log("✈️ [updateData] Условие Shipped сработало! Запускаем отправку...");
             sendTelegramNotification('ORDER_SHIPPED', {
               orderId: updated._id,
               customerName: customer.name || 'Customer'
-            }, customer.telegramId); // 👈 Передаем корректный telegramId
+            }, customer.telegramId); 
           } 
-          // Если заказ успешно завершен
           else if (status === 'Completed' || status === 'Завершен') {
+            console.log("🏁 [updateData] Условие Completed сработало! Запускаем отправку...");
             sendTelegramNotification('ORDER_COMPLETED', {
               orderId: updated._id,
               customerName: customer.name || 'Customer',
               totalPrice: updated.totalPrice
-            }, customer.telegramId); // 👈 Передаем корректный telegramId
+            }, customer.telegramId); 
+          } else {
+            console.log(`ℹ️ [updateData] Статус "${status}" не подходит ни под одно условие отправки уведомления клиенту.`);
           }
+        } else if (customer && !customer.telegramId) {
+          console.log("⚠️ [updateData] Отмена отправки: у пользователя отсутствует или пустой telegramId!");
         }
       } catch (userErr) {
         console.error('⚠️ Ошибка отправки статуса пользователю в ТГ:', userErr.message);
@@ -129,7 +140,7 @@ exports.updateData = async (req, res) => {
 
     res.json(updated);
   } catch (error) {
-    console.error('Ошибка обновления:', error);
+    console.error('❌ Ошибка обновления в контроллере:', error);
     res.status(500).json({ message: 'Ошибка при обновлении данных' });
   }
 };

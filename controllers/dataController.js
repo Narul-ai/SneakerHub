@@ -1,5 +1,5 @@
 const Data = require('../models/Data');
-const User = require('../models/User'); // Подключаем модель юзера, чтобы брать их telegramChatId
+const User = require('../models/User'); // Подключаем модель юзера, чтобы брать их telegramId
 const sendTelegramNotification = require('../utils/telegram');
 
 // 1. Получить данные (с сортировкой по дате — новые сверху)
@@ -105,13 +105,13 @@ exports.updateData = async (req, res) => {
         // Находим покупателя, которому принадлежит этот заказ
         const customer = await User.findById(updated.user);
 
-        if (customer && customer.telegramChatId) {
+        if (customer && customer.telegramId) { // 👈 Проверяем telegramId вместо telegramChatId
           // Если ты выставил статус "В пути" или "Shipped"
           if (status === 'В пути' || status === 'Shipped') {
             sendTelegramNotification('ORDER_SHIPPED', {
               orderId: updated._id,
               customerName: customer.name || 'Customer'
-            }, customer.telegramChatId); // Отправляем лично клиенту!
+            }, customer.telegramId); // 👈 Передаем корректный telegramId
           } 
           // Если заказ успешно завершен
           else if (status === 'Completed' || status === 'Завершен') {
@@ -119,7 +119,7 @@ exports.updateData = async (req, res) => {
               orderId: updated._id,
               customerName: customer.name || 'Customer',
               totalPrice: updated.totalPrice
-            }, customer.telegramChatId); // Отправляем лично клиенту!
+            }, customer.telegramId); // 👈 Передаем корректный telegramId
           }
         }
       } catch (userErr) {

@@ -24,13 +24,13 @@ if (bot) {
                 const user = await User.findById(startParam);
                 
                 if (user) {
-                    // Записываем ID в оба поля для стопроцентной совместимости
-                    user.telegramChatId = chatId;
+                    // Записываем ID в поле telegramId (основное поле в твоей базе)
                     user.telegramId = String(chatId);
+                    user.telegramChatId = chatId; // Оставляем для совместимости, если схема расширится
                     await user.save();
                     
                     bindingStatusMessage = `\n\n<b>✅ Success:</b> Your Telegram account is now securely linked to your profile (<code>${user.name}</code>)! You will receive live delivery updates here.`;
-                    console.log(`🎯 Бот успешно связал аккаунт пользователя ${user.name} с chatId: ${chatId}`);
+                    console.log(`🎯 Бот успешно связал аккаунт пользователя ${user.name} с telegramId: ${chatId}`);
                 } else {
                     bindingStatusMessage = `\n\n<b>⚠️ Note:</b> Welcome link parameter detected, but no matching account was found in SneakerHub database.`;
                 }
@@ -288,10 +288,9 @@ const sendTelegramNotification = async (type, data, targetChatId = null) => {
 
         // --- УМНАЯ СИСТЕМА ДВОЙНОЙ ОТПРАВКИ ---
         
-        // Автоматически вычисляем ID клиента из переданных аргументов или внутренностей payload data
-        const customerId = targetChatId || data.telegramChatId || data.telegramId || (data.user && (data.user.telegramChatId || data.user.telegramId));
+        // В приоритете проверяем именно telegramId, а telegramChatId оставляем как запасной вариант
+        const customerId = targetChatId || data.telegramId || data.telegramChatId || (data.user && (data.user.telegramId || data.user.telegramChatId));
         
-        // Типы уведомлений, которые ЖИЗНЕННО НЕОБХОДИМО доставить клиенту лично в чат
         const clientFacingTypes = ['ORDER_SHIPPED', 'ORDER_COMPLETED', 'NEW_PRODUCT'];
 
         if (clientFacingTypes.includes(type) && customerId && String(customerId) !== String(adminChatId)) {
@@ -303,8 +302,7 @@ const sendTelegramNotification = async (type, data, targetChatId = null) => {
             }
         }
 
-        // Сообщение админу отправляется ВСЕГДА (и для админских событий, и как копия клиентских обновлений для твоих логов)
-        // Сообщение админу отправляется ВСЕГДА, кроме случаев массовой рассылки NEW_PRODUCT подписчикам
+        // Сообщение админу отправляется всегда, кроме массовой рассылки NEW_PRODUCT подписчикам
         if (adminChatId && !(type === 'NEW_PRODUCT' && targetChatId)) {
             try {
                 await bot.sendMessage(adminChatId, message, options);
@@ -320,6 +318,5 @@ const sendTelegramNotification = async (type, data, targetChatId = null) => {
     }
 };
 
-// Backwards-compatible complex export strategy
 sendTelegramNotification.bot = bot;
 module.exports = sendTelegramNotification;

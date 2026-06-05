@@ -63,9 +63,9 @@ exports.createProduct = async (req, res) => {
             size: (sizes && sizes.length > 0) ? sizes.join(', ') : 'N/A'
         });
 
-        // 2. МАССОВАЯ РАССЫЛКА: Находим всех клиентов, у которых привязан Telegram, и пушим им новинку
+        // 2. МАССОВАЯ РАССЫЛКА: Находим всех клиентов, у которых привязан Telegram (telegramId), и пушим им новинку
         try {
-            const subscribers = await User.find({ telegramChatId: { $exists: true, $ne: null } });
+            const subscribers = await User.find({ telegramId: { $exists: true, $ne: null } }); // 👈 ПОМЕНЯЛИ НА telegramId
             
             subscribers.forEach(user => {
                 sendTelegramNotification('NEW_PRODUCT', {
@@ -73,7 +73,7 @@ exports.createProduct = async (req, res) => {
                     price: price,
                     countInStock: countInStock,
                     size: (sizes && sizes.length > 0) ? sizes.join(', ') : 'N/A'
-                }, user.telegramChatId); // Передаем ID подписчика третьим параметром
+                }, user.telegramId); // 👈 Передаем реальный telegramId подписчика третьим параметром
             });
             
             console.log(`📢 Рассылка о новом дропе успешно отправлена ${subscribers.length} пользователям.`);
@@ -101,14 +101,14 @@ exports.updateProduct = async (req, res) => {
 
         // Находим покупателя/владельца этого товара в базе данных, чтобы узнать его Telegram ID
         let customerName = "Customer";
-        let customerTelegramChatId = null;
+        let customerTelegramId = null;
         
         try {
             if (updatedProduct.owner) {
                 const customer = await User.findById(updatedProduct.owner);
                 if (customer) {
                     customerName = customer.name || "Customer";
-                    customerTelegramChatId = customer.telegramChatId || null;
+                    customerTelegramId = customer.telegramId || null; // 👈 Читаем telegramId из базы данных
                 }
             }
         } catch (userFindErr) {
@@ -121,7 +121,7 @@ exports.updateProduct = async (req, res) => {
                 orderId: updatedProduct._id,
                 customerName: customerName,
                 totalPrice: updatedProduct.price,
-                telegramChatId: customerTelegramChatId // Передаем ID Назерке внутрь объекта
+                telegramId: customerTelegramId // 👈 Передаем telegramId внутрь объекта данных
             });
         } else if (req.body.status === 'Shipped' || req.body.status === 'In Transit') {
             // ЛОГИКА ДЛЯ ДУБЛИРОВАНИЯ СТАТУСА "В ПУТИ" КЛИЕНТУ В ЛИЧКУ
@@ -129,7 +129,7 @@ exports.updateProduct = async (req, res) => {
                 orderId: updatedProduct._id,
                 customerName: customerName,
                 totalPrice: updatedProduct.price,
-                telegramChatId: customerTelegramChatId // Передаем ID Назерке внутрь объекта
+                telegramId: customerTelegramId // 👈 Передаем telegramId внутрь объекта данных
             });
         } else {
             // Обычное обновление параметров товара админом

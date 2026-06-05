@@ -76,14 +76,17 @@ exports.updateData = async (req, res) => {
     console.log("🛠️ [updateData] Контроллер вызван! ID заказа:", req.params.id, "Полученный с фронта статус:", status);
 
     // 🔥 АВТОПЕРЕВОД: Если статус пришёл на русском, переводим его в стандарт для базы данных
-    if (status) {
-      if (status === 'В пути' || status === 'в пути') {
-        status = 'Shipped';
-      }
-      if (status === 'Завершен' || status === 'завершен' || status === 'Завершён' || status === 'завершён') {
-        status = 'Completed';
-      }
-    }
+if (status) {
+  if (status === 'Новый' || status === 'новый') {
+    status = 'Pending';
+  }
+  if (status === 'В пути' || status === 'в пути') {
+    status = 'Shipped';
+  }
+  if (status === 'Завершен' || status === 'завершен' || status === 'Завершён' || status === 'завершён') {
+    status = 'Completed';
+  }
+}
 
     const query = { _id: req.params.id };
     if (req.user.role !== 'admin') {

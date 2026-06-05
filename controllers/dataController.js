@@ -28,7 +28,7 @@ exports.createData = async (req, res) => {
       number,
       items: items || [], 
       totalPrice: totalPrice || 0,
-      status: 'Pending', 
+      status: 'Pending', // Изначально статус всегда на английском
       user: req.user.id 
     });
 
@@ -67,13 +67,23 @@ exports.deleteData = async (req, res) => {
   }
 };
 
-// 4. Обновить запись (С ПОЛНЫМ ЛОГИРОВАНИЕМ ДЛЯ ТЕСТА)
+// 4. Обновить запись (ТЕПЕРЬ С АВТОПЕРЕВОДОМ СТАТУСОВ НА АНГЛИЙСКИЙ)
 exports.updateData = async (req, res) => {
   try {
-    const { text, number, status } = req.body;
+    let { text, number, status } = req.body; // Используем let, чтобы можно было перезаписать status
     
-    // 🔍 ЛОГ 1: Проверяем, пришёл ли вообще запрос в этот контроллер
-    console.log("🛠️ [updateData] Контроллер вызван! ID заказа:", req.params.id, "Полученный статус:", status);
+    // 🔍 ЛОГ 1: Проверяем, что пришло с фронтенда
+    console.log("🛠️ [updateData] Контроллер вызван! ID заказа:", req.params.id, "Полученный с фронта статус:", status);
+
+    // 🔥 АВТОПЕРЕВОД: Если статус пришёл на русском, переводим его в стандарт для базы данных
+    if (status) {
+      if (status === 'В пути' || status === 'в пути') {
+        status = 'Shipped';
+      }
+      if (status === 'Завершен' || status === 'завершен' || status === 'Завершён' || status === 'завершён') {
+        status = 'Completed';
+      }
+    }
 
     const query = { _id: req.params.id };
     if (req.user.role !== 'admin') {
@@ -83,7 +93,7 @@ exports.updateData = async (req, res) => {
     const updateFields = {};
     if (text !== undefined) updateFields.text = text;
     if (number !== undefined) updateFields.number = number;
-    if (status !== undefined) updateFields.status = status;
+    if (status !== undefined) updateFields.status = status; // Сюда попадёт уже английский статус!
 
     const updated = await Data.findOneAndUpdate(
       query,
@@ -96,7 +106,7 @@ exports.updateData = async (req, res) => {
       return res.status(404).json({ message: 'Запись для обновления не найдена' });
     }
 
-    console.log("✅ [updateData] Заказ успешно обновлен в БД. Текущий статус заказа:", updated.status);
+    console.log("✅ [updateData] Заказ успешно обновлен в БД. Статус в базе теперь строго:", updated.status);
 
     if (status) {
       try {
@@ -111,16 +121,17 @@ exports.updateData = async (req, res) => {
         }
 
         if (customer && customer.telegramId) {
-          console.log(`🚀 [updateData] Проверка условий для отправки. Текст статуса: "${status}"`);
+          console.log(`🚀 [updateData] Проверка условий для отправки уведомления. Текущий статус: "${status}"`);
           
-          if (status === 'В пути' || status === 'Shipped') {
+          // Теперь условия проверяют ТОЛЬКО чистый английский язык
+          if (status === 'Shipped') {
             console.log("✈️ [updateData] Условие Shipped сработало! Запускаем отправку...");
             sendTelegramNotification('ORDER_SHIPPED', {
               orderId: updated._id,
               customerName: customer.name || 'Customer'
             }, customer.telegramId); 
           } 
-          else if (status === 'Completed' || status === 'Завершен') {
+          else if (status === 'Completed') {
             console.log("🏁 [updateData] Условие Completed сработало! Запускаем отправку...");
             sendTelegramNotification('ORDER_COMPLETED', {
               orderId: updated._id,
@@ -128,7 +139,7 @@ exports.updateData = async (req, res) => {
               totalPrice: updated.totalPrice
             }, customer.telegramId); 
           } else {
-            console.log(`ℹ️ [updateData] Статус "${status}" не подходит ни под одно условие отправки уведомления клиенту.`);
+            console.log(`ℹ️ [updateData] Статус "${status}" не требует отправки уведомления клиенту.`);
           }
         } else if (customer && !customer.telegramId) {
           console.log("⚠️ [updateData] Отмена отправки: у пользователя отсутствует или пустой telegramId!");
